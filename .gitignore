@@ -1,0 +1,59 @@
+# Local machine
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local agent instructions and private planning
+AGENTS.override.md
+docs/internal/
+Archive/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+.aws-sam/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node / tooling
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# AWS / SAM / CDK / deployment artifacts
+cdk.out/
+.sam-cache/
+packaged.yaml
+samconfig.local.toml
+cloudformation-outputs.json
+
+# Docker / local runtime
+.docker/
+docker-data/
+tmp/
+logs/
+*.log
+
+# Database and benchmark artifacts
+*.db
+*.sqlite
+*.sqlite3
+benchmarks/results/
+benchmarks/tmp/
