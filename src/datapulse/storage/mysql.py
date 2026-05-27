@@ -123,6 +123,11 @@ class MySQLStorageAdapter(StorageBackend):
                         created_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        record_type = VALUES(record_type),
+                        amount = VALUES(amount),
+                        currency = VALUES(currency),
+                        payload_json = VALUES(payload_json)
                     """,
                     (
                         record.record_id,
@@ -153,6 +158,10 @@ class MySQLStorageAdapter(StorageBackend):
                     created_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    row_number = VALUES(row_number),
+                    error_code = VALUES(error_code),
+                    error_message = VALUES(error_message)
                 """,
                 (
                     error.error_id,
@@ -206,6 +215,13 @@ class MySQLStorageAdapter(StorageBackend):
                     updated_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    total_records = VALUES(total_records),
+                    valid_records = VALUES(valid_records),
+                    invalid_records = VALUES(invalid_records),
+                    total_amount = VALUES(total_amount),
+                    summary_json = VALUES(summary_json),
+                    updated_at = VALUES(updated_at)
                 """,
                 (
                     summary.job_id,
@@ -361,8 +377,17 @@ class MySQLStorageAdapter(StorageBackend):
         if metadata is not None:
             update_metadata = dict(metadata)
 
-        last_error = update_metadata.get("last_error")
+        current_job = self.get_job(job_id)
+        if current_job is None:
+            raise KeyError(f"Job not found: {job_id}")
+
+        last_error = update_metadata.get("last_error", current_job.last_error)
         updated_at = update_metadata.get("updated_at", utc_now())
+        total_records = update_metadata.get("total_records", current_job.total_records)
+        valid_records = update_metadata.get("valid_records", current_job.valid_records)
+        invalid_records = update_metadata.get("invalid_records", current_job.invalid_records)
+        attempt_count = update_metadata.get("attempt_count", current_job.attempt_count)
+        next_attempt_at = update_metadata.get("next_attempt_at", current_job.next_attempt_at)
 
         # M1 keeps status updates narrow: lifecycle state plus error context.
         with connection.cursor(dictionary=True) as cursor:
@@ -382,11 +407,11 @@ class MySQLStorageAdapter(StorageBackend):
                 (
                     status,
                     last_error,
-                    update_metadata.get("total_records", 0),
-                    update_metadata.get("valid_records", 0),
-                    update_metadata.get("invalid_records", 0),
-                    update_metadata.get("attempt_count", 0),
-                    update_metadata.get("next_attempt_at"),
+                    total_records,
+                    valid_records,
+                    invalid_records,
+                    attempt_count,
+                    next_attempt_at,
                     updated_at,
                     job_id,
                 ),

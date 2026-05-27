@@ -43,27 +43,30 @@ def handle_processing_message(
     if job is None:
         raise KeyError(f"Job not found: {message.job_id}")
 
-    if job.status == "SUCCEEDED":
-        return ProcessingResult(job_id=message.job_id, status="SUCCEEDED", already_processed=True)
+    if _is_terminal_processed_job(job, storage):
+        return ProcessingResult(job_id=message.job_id, status=job.status, already_processed=True)
 
     now = clock()
-    storage.update_job_status(message.job_id, "PROCESSING", metadata={"updated_at": now})
+    processing_job = storage.update_job_status(
+        message.job_id,
+        "PROCESSING",
+        metadata={"updated_at": now},
+    )
 
     try:
         csv_text = object_reader(message.bucket, message.object_key)
+        raw_rows = parse_csv_orders(csv_text)
+        validation_result = validate_order_rows(raw_rows, job_id=message.job_id)
+        records = transform_order_rows(message.job_id, validation_result.valid_rows)
+        summary = write_processing_results(
+            storage=storage,
+            job_id=message.job_id,
+            total_records=len(raw_rows),
+            records=records,
+            errors=validation_result.errors,
+        )
     except Exception as exc:  # noqa: BLE001 - handler records arbitrary local read failures.
-        return _handle_processing_failure(message, storage, job, exc, max_attempts, now)
-
-    raw_rows = parse_csv_orders(csv_text)
-    validation_result = validate_order_rows(raw_rows, job_id=message.job_id)
-    records = transform_order_rows(message.job_id, validation_result.valid_rows)
-    summary = write_processing_results(
-        storage=storage,
-        job_id=message.job_id,
-        total_records=len(raw_rows),
-        records=records,
-        errors=validation_result.errors,
-    )
+        return _handle_processing_failure(message, storage, processing_job, exc, max_attempts, now)
 
     status = "SUCCEEDED"
     last_error = None
@@ -83,6 +86,17 @@ def handle_processing_message(
         },
     )
     return ProcessingResult(job_id=message.job_id, status=status)
+
+
+def _is_terminal_processed_job(job: JobRecord, storage: StorageBackend) -> bool:
+    """Return whether a duplicate message should avoid rewriting results."""
+    if job.status in {"SUCCEEDED", "DEAD_LETTERED"}:
+        return True
+
+    if job.status == "FAILED":
+        return storage.get_result_summary(job.job_id) is not None
+
+    return False
 
 
 def _handle_processing_failure(

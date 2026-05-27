@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from datetime import timezone
 from decimal import Decimal
@@ -124,6 +125,48 @@ def test_processing_handler_records_bad_rows_without_losing_status() -> None:
     assert errors[0].error_code == "INVALID_AMOUNT"
 
 
+def test_processing_handler_does_not_reprocess_failed_validation_result() -> None:
+    connection = FakeMySQLConnection()
+    adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    dataset_path = FIXTURE_DIR / "orders_with_bad_row.csv"
+    message = ProcessingMessage(
+        job_id="job_process_partial_duplicate",
+        bucket="datapulse-local-raw",
+        object_key="uploads/orders_with_bad_row.csv",
+        object_key_hash="hash-partial-duplicate",
+    )
+    seed_job_and_manifest(
+        adapter,
+        job_id=message.job_id,
+        object_key=message.object_key,
+        object_key_hash=message.object_key_hash,
+        now=now,
+    )
+
+    first_result = handle_processing_message(
+        message,
+        storage=adapter,
+        object_reader=lambda bucket, key: dataset_path.read_text(),
+        clock=lambda: now,
+    )
+    second_result = handle_processing_message(
+        message,
+        storage=adapter,
+        object_reader=lambda bucket, key: (_ for _ in ()).throw(
+            AssertionError("partial validation result should not be reprocessed")
+        ),
+        clock=lambda: now,
+    )
+
+    assert first_result.status == "FAILED"
+    assert second_result.status == "FAILED"
+    assert second_result.already_processed is True
+    assert len(connection.processed_records) == 2
+    assert len(connection.processing_errors) == 1
+    assert len(connection.result_summaries) == 1
+
+
 def test_processing_handler_is_idempotent_for_repeated_message() -> None:
     connection = FakeMySQLConnection()
     adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
@@ -198,6 +241,42 @@ def test_processing_handler_records_retry_metadata_before_dlq() -> None:
     assert len(connection.dead_letter_messages) == 0
 
 
+def test_processing_handler_records_retry_metadata_for_parser_failure() -> None:
+    connection = FakeMySQLConnection()
+    adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    message = ProcessingMessage(
+        job_id="job_process_parse_retry",
+        bucket="datapulse-local-raw",
+        object_key="uploads/bad_header.csv",
+        object_key_hash="hash-parse-retry",
+    )
+    seed_job_and_manifest(
+        adapter,
+        job_id=message.job_id,
+        object_key=message.object_key,
+        object_key_hash=message.object_key_hash,
+        now=now,
+    )
+
+    result = handle_processing_message(
+        message,
+        storage=adapter,
+        object_reader=lambda bucket, key: "order_id,amount\norder-001,19.99\n",
+        max_attempts=3,
+        clock=lambda: now,
+    )
+
+    updated_job = adapter.get_job(message.job_id)
+    assert result.status == "FAILED"
+    assert updated_job is not None
+    assert updated_job.status == "FAILED"
+    assert updated_job.attempt_count == 1
+    assert updated_job.last_error == "Missing required CSV columns: currency"
+    assert updated_job.next_attempt_at is not None
+    assert len(connection.dead_letter_messages) == 0
+
+
 def test_processing_handler_saves_dlq_after_retry_exhaustion() -> None:
     connection = FakeMySQLConnection()
     adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
@@ -230,3 +309,14 @@ def test_processing_handler_saves_dlq_after_retry_exhaustion() -> None:
     assert updated_job.status == "DEAD_LETTERED"
     assert updated_job.attempt_count == 1
     assert len(connection.dead_letter_messages) == 1
+    dead_letter = next(iter(connection.dead_letter_messages.values()))
+    assert dead_letter["job_id"] == message.job_id
+    assert dead_letter["source_queue"] == "local-processing"
+    assert dead_letter["error_message"] == message.object_key
+    assert dead_letter["attempt_count"] == 1
+    assert json.loads(str(dead_letter["payload_json"])) == {
+        "job_id": "job_process_dlq",
+        "bucket": "datapulse-local-raw",
+        "object_key": "uploads/missing.csv",
+        "object_key_hash": "hash-dlq",
+    }
