@@ -55,9 +55,21 @@ def test_apply_mysql_schema_executes_jobs_schema_and_commits() -> None:
 
     apply_mysql_schema(connection)
 
-    assert len(connection.executed_statements) == 2
+    assert len(connection.executed_statements) == 6
     assert connection.executed_statements[0].startswith("CREATE TABLE IF NOT EXISTS jobs")
     assert connection.executed_statements[1].startswith(
         "CREATE TABLE IF NOT EXISTS file_manifests"
+    )
+    assert connection.executed_statements[2].startswith(
+        "CREATE TABLE IF NOT EXISTS processed_records"
+    )
+    assert connection.executed_statements[3].startswith(
+        "CREATE TABLE IF NOT EXISTS processing_errors"
+    )
+    assert connection.executed_statements[4].startswith(
+        "CREATE TABLE IF NOT EXISTS result_summaries"
+    )
+    assert connection.executed_statements[5].startswith(
+        "CREATE TABLE IF NOT EXISTS dead_letter_messages"
     )
     assert connection.commit_count == 1
