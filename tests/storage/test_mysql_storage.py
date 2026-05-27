@@ -32,6 +32,7 @@ class FakeMySQLCursor:
         self.connection = connection
         self.dictionary = dictionary
         self.selected_row: dict[str, object] | None = None
+        self.rowcount = -1
 
     def __enter__(self) -> "FakeMySQLCursor":
         """Return this cursor for context manager usage."""
@@ -47,6 +48,7 @@ class FakeMySQLCursor:
 
         # Store inserted job rows by primary key.
         if normalized_sql.startswith("insert into jobs"):
+            assert len(params) == 12
             job_id = str(params[0])
             if job_id in self.connection.jobs:
                 raise ValueError(f"Duplicate job_id: {job_id}")
@@ -61,25 +63,39 @@ class FakeMySQLCursor:
                 "invalid_records": params[6],
                 "attempt_count": params[7],
                 "last_error": params[8],
-                "next_attempt_at": params[9],
-                "created_at": params[10],
-                "updated_at": params[11],
+                "next_attempt_at": self._store_mysql_datetime(params[9]),
+                "created_at": self._store_mysql_datetime(params[10]),
+                "updated_at": self._store_mysql_datetime(params[11]),
             }
+            self.rowcount = 1
             return
 
         # Return one job row for the requested primary key.
         if normalized_sql.startswith("select") and "from jobs" in normalized_sql:
+            assert "where job_id = %s" in normalized_sql
+            assert len(params) == 1
             job_id = str(params[0])
             self.selected_row = self.connection.jobs.get(job_id)
+            if self.selected_row is None:
+                self.rowcount = 0
+            else:
+                self.rowcount = 1
             return
 
         # Update status fields on an existing job row.
         if normalized_sql.startswith("update jobs"):
+            assert "where job_id = %s" in normalized_sql
+            assert len(params) == 4
             job_id = str(params[3])
+            if job_id not in self.connection.jobs:
+                self.rowcount = 0
+                return
+
             row = self.connection.jobs[job_id]
             row["status"] = params[0]
             row["last_error"] = params[1]
-            row["updated_at"] = params[2]
+            row["updated_at"] = self._store_mysql_datetime(params[2])
+            self.rowcount = 1
             return
 
         raise AssertionError(f"Unexpected SQL: {sql}")
@@ -87,6 +103,13 @@ class FakeMySQLCursor:
     def fetchone(self) -> dict[str, object] | None:
         """Return the selected row from the most recent SELECT."""
         return self.selected_row
+
+    def _store_mysql_datetime(self, value: object) -> object:
+        """Store datetimes the way a MySQL DATETIME column usually returns them."""
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return value.replace(tzinfo=None)
+
+        return value
 
 
 def test_create_job_then_get_job_returns_the_saved_job() -> None:
@@ -151,12 +174,71 @@ def test_update_job_status_returns_updated_job() -> None:
     assert connection.commit_count == 2
 
 
-def test_create_job_rejects_invalid_status() -> None:
+def test_update_job_status_rejects_invalid_status_before_writing() -> None:
+    connection = FakeMySQLConnection()
+    adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
+    now = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
+    adapter.create_job(
+        JobRecord(
+            job_id="job_003",
+            status="QUEUED",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    with pytest.raises(ValueError, match="Invalid job status"):
+        adapter.update_job_status("job_003", "NOT_A_STATUS")
+
+    loaded_job = adapter.get_job("job_003")
+    assert loaded_job is not None
+    assert loaded_job.status == "QUEUED"
+    assert connection.commit_count == 1
+
+
+def test_update_missing_job_raises_key_error_without_commit() -> None:
     connection = FakeMySQLConnection()
     adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
 
+    with pytest.raises(KeyError, match="Job not found"):
+        adapter.update_job_status("missing_job", "PROCESSING")
+
+    assert connection.commit_count == 0
+
+
+def test_get_job_treats_mysql_naive_datetimes_as_utc() -> None:
+    connection = FakeMySQLConnection()
+    adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
+    naive_created_at = datetime(2026, 5, 26, 12, 0)
+    naive_next_attempt_at = datetime(2026, 5, 26, 12, 5)
+    connection.jobs["job_naive"] = {
+        "job_id": "job_naive",
+        "status": "FAILED",
+        "source_bucket": None,
+        "source_key": None,
+        "total_records": 0,
+        "valid_records": 0,
+        "invalid_records": 0,
+        "attempt_count": 1,
+        "last_error": "temporary failure",
+        "next_attempt_at": naive_next_attempt_at,
+        "created_at": naive_created_at,
+        "updated_at": naive_created_at,
+    }
+
+    loaded_job = adapter.get_job("job_naive")
+
+    assert loaded_job is not None
+    assert loaded_job.created_at == naive_created_at.replace(tzinfo=timezone.utc)
+    assert loaded_job.updated_at == naive_created_at.replace(tzinfo=timezone.utc)
+    assert loaded_job.next_attempt_at == naive_next_attempt_at.replace(tzinfo=timezone.utc)
+
+
+def test_job_record_rejects_invalid_status() -> None:
+    connection = FakeMySQLConnection()
+
     with pytest.raises(ValueError, match="Invalid job status"):
-        adapter.create_job(JobRecord(job_id="job_bad", status="NOT_A_STATUS"))
+        JobRecord(job_id="job_bad", status="NOT_A_STATUS")
 
     assert connection.jobs == {}
     assert connection.commit_count == 0

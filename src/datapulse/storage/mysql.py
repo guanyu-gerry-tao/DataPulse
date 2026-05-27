@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Mapping
 
@@ -125,6 +126,10 @@ class MySQLStorageAdapter(StorageBackend):
                 """,
                 (status, last_error, updated_at, job_id),
             )
+            updated_count = cursor.rowcount
+
+        if updated_count == 0:
+            raise KeyError(f"Job not found: {job_id}")
 
         connection.commit()
         updated_job = self.get_job(job_id)
@@ -167,6 +172,9 @@ class MySQLStorageAdapter(StorageBackend):
     def _required_datetime(self, value: object) -> datetime:
         """Return a datetime value for non-null timestamp columns."""
         if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+
             return value
 
         raise TypeError(f"Expected datetime value, got {type(value)!r}")
