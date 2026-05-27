@@ -134,6 +134,14 @@ class DynamoDBStorageAdapter(StorageBackend):
         if self.get_job(manifest.job_id) is None:
             raise ValueError(f"Missing job_id for file manifest: {manifest.job_id}")
 
+        existing_rows = self.table.query_gsi1(
+            self._file_gsi_pk(manifest.bucket, manifest.object_key_hash)
+        )
+        if existing_rows:
+            raise ValueError(
+                f"Duplicate file manifest: {(manifest.bucket, manifest.object_key_hash)}"
+            )
+
         self.table.put_item(
             {
                 "PK": self._job_pk(manifest.job_id),

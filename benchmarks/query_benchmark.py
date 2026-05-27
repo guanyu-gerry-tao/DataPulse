@@ -49,13 +49,18 @@ def build_sample_records(record_count: int) -> list[ProcessedRecord]:
     return records
 
 
-def compare_query_paths(records: list[ProcessedRecord]) -> QueryBenchmarkResult:
+def compare_query_paths(
+    records: list[ProcessedRecord],
+    summary: ResultSummary | None = None,
+) -> QueryBenchmarkResult:
     """Compare raw aggregation with precomputed summary lookup."""
     raw_start = perf_counter()
     raw_metrics = aggregate_raw_records(records)
     raw_query_seconds = perf_counter() - raw_start
 
-    summary = build_result_summary("job_benchmark", records)
+    if summary is None:
+        summary = build_result_summary("job_benchmark", records)
+
     summary_start = perf_counter()
     summary_metrics = summary_to_metrics(summary)
     summary_query_seconds = perf_counter() - summary_start

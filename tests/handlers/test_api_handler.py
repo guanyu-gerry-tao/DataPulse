@@ -182,3 +182,80 @@ def test_api_handler_returns_not_found_for_missing_job() -> None:
     body = json.loads(response["body"])
     assert response["statusCode"] == 404
     assert body["message"] == "Job not found"
+
+
+def test_api_handler_returns_bad_request_for_invalid_json_body() -> None:
+    storage = DynamoDBStorageAdapter(table=InMemoryDynamoDBTable())
+    queue = InMemoryQueueAdapter()
+
+    response = handle_api_request(
+        {
+            "requestContext": {"http": {"method": "POST", "path": "/jobs"}},
+            "body": "{not-json",
+        },
+        storage=storage,
+        queue=queue,
+    )
+
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 400
+    assert body["message"] == "Request body must be valid JSON"
+    assert len(queue.messages) == 0
+
+
+def test_api_handler_returns_bad_request_for_missing_submit_field() -> None:
+    storage = DynamoDBStorageAdapter(table=InMemoryDynamoDBTable())
+    queue = InMemoryQueueAdapter()
+
+    response = handle_api_request(
+        {
+            "requestContext": {"http": {"method": "POST", "path": "/jobs"}},
+            "body": json.dumps({"object_key": "uploads/orders.csv"}),
+        },
+        storage=storage,
+        queue=queue,
+    )
+
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 400
+    assert body["message"] == "bucket is required"
+    assert len(queue.messages) == 0
+
+
+def test_api_handler_returns_bad_request_for_unsupported_submit_extension() -> None:
+    storage = DynamoDBStorageAdapter(table=InMemoryDynamoDBTable())
+    queue = InMemoryQueueAdapter()
+
+    response = handle_api_request(
+        {
+            "requestContext": {"http": {"method": "POST", "path": "/jobs"}},
+            "body": json.dumps(
+                {
+                    "bucket": "datapulse-local-raw",
+                    "object_key": "uploads/readme.txt",
+                }
+            ),
+        },
+        storage=storage,
+        queue=queue,
+    )
+
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 400
+    assert body["message"] == "Unsupported file extension: .txt"
+    assert len(queue.messages) == 0
+
+
+def test_api_handler_returns_route_not_found_for_unknown_get_path() -> None:
+    storage = DynamoDBStorageAdapter(table=InMemoryDynamoDBTable())
+    queue = InMemoryQueueAdapter()
+
+    response = handle_api_request(
+        {"requestContext": {"http": {"method": "GET", "path": "/health"}}},
+        storage=storage,
+        queue=queue,
+    )
+
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 404
+    assert body["message"] == "Route not found"

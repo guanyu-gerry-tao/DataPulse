@@ -34,19 +34,22 @@ def handle_api_request(
     path = _request_path(event)
 
     if method == "POST" and path == "/jobs":
-        return submit_job_response(
-            event,
-            storage=storage,
-            queue=queue,
-            job_id_factory=job_id_factory,
-            clock=clock,
-        )
+        try:
+            return submit_job_response(
+                event,
+                storage=storage,
+                queue=queue,
+                job_id_factory=job_id_factory,
+                clock=clock,
+            )
+        except ValueError as error:
+            return _json_response(400, {"message": str(error)})
 
-    if method == "GET" and path.endswith("/result"):
+    if method == "GET" and _is_job_result_path(path):
         job_id = _path_job_id(event)
         return get_result_summary_response(storage, job_id)
 
-    if method == "GET":
+    if method == "GET" and _is_job_status_path(path):
         job_id = _path_job_id(event)
         return get_job_status_response(storage, job_id)
 
@@ -228,6 +231,18 @@ def _path_job_id(event: dict[str, Any]) -> str:
     return ""
 
 
+def _is_job_status_path(path: str) -> bool:
+    """Return whether a path matches GET /jobs/{job_id}."""
+    path_parts = [part for part in path.split("/") if part]
+    return len(path_parts) == 2 and path_parts[0] == "jobs"
+
+
+def _is_job_result_path(path: str) -> bool:
+    """Return whether a path matches GET /jobs/{job_id}/result."""
+    path_parts = [part for part in path.split("/") if part]
+    return len(path_parts) == 3 and path_parts[0] == "jobs" and path_parts[2] == "result"
+
+
 def _json_body(event: dict[str, Any]) -> dict[str, Any]:
     """Parse a JSON request body."""
     body = event.get("body", "{}")
@@ -238,7 +253,10 @@ def _json_body(event: dict[str, Any]) -> dict[str, Any]:
         return body
 
     if isinstance(body, str):
-        parsed_body = json.loads(body)
+        try:
+            parsed_body = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise ValueError("Request body must be valid JSON") from error
         if isinstance(parsed_body, dict):
             return parsed_body
 

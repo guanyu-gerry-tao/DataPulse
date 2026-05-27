@@ -128,6 +128,57 @@ def test_contract_record_manifest_and_find_job_by_file(storage: StorageBackend) 
     assert loaded_job.job_id == "job_contract_manifest"
 
 
+def test_contract_duplicate_file_manifest_cannot_point_to_second_job(
+    storage: StorageBackend,
+) -> None:
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    storage.create_job(
+        JobRecord(
+            job_id="job_contract_manifest_first",
+            status="QUEUED",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    storage.create_job(
+        JobRecord(
+            job_id="job_contract_manifest_second",
+            status="QUEUED",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    storage.record_file_manifest(
+        FileManifest(
+            manifest_id="manifest_contract_first",
+            job_id="job_contract_manifest_first",
+            bucket="datapulse-local-raw",
+            object_key="uploads/orders.csv",
+            object_key_hash="hash-contract-duplicate",
+            created_at=now,
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate file manifest"):
+        storage.record_file_manifest(
+            FileManifest(
+                manifest_id="manifest_contract_second",
+                job_id="job_contract_manifest_second",
+                bucket="datapulse-local-raw",
+                object_key="uploads/orders.csv",
+                object_key_hash="hash-contract-duplicate",
+                created_at=now,
+            )
+        )
+
+    loaded_job = storage.find_job_by_file(
+        "datapulse-local-raw",
+        "hash-contract-duplicate",
+    )
+    assert loaded_job is not None
+    assert loaded_job.job_id == "job_contract_manifest_first"
+
+
 def test_contract_find_job_by_file_returns_none_for_missing_manifest(
     storage: StorageBackend,
 ) -> None:

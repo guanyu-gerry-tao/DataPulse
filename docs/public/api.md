@@ -42,6 +42,16 @@ Duplicate file response:
 }
 ```
 
+Bad request response:
+
+`400 Bad Request`
+
+```json
+{
+  "message": "bucket is required"
+}
+```
+
 ## Get Job Status
 
 `GET /jobs/{job_id}`
