@@ -7,9 +7,14 @@ from typing import Any
 
 
 def load_mysql_schema_sql() -> str:
-    """Return the repeatable MySQL schema SQL for local initialization."""
-    schema_path = files(__package__).joinpath("001_create_jobs.sql")
-    return schema_path.read_text(encoding="utf-8")
+    """Return all repeatable MySQL schema SQL for local initialization."""
+    schema_files = sorted(files(__package__).iterdir())
+    schema_sql_parts = []
+    for schema_file in schema_files:
+        if schema_file.name.endswith(".sql"):
+            schema_sql_parts.append(schema_file.read_text(encoding="utf-8"))
+
+    return "\n".join(schema_sql_parts)
 
 
 def apply_mysql_schema(connection: Any) -> None:

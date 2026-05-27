@@ -54,3 +54,34 @@ class JobRecord:
 
         # Keep status validation close to the model shared by all adapters.
         validate_job_status(self.status)
+
+
+@dataclass(frozen=True)
+class FileManifest:
+    """Metadata that identifies one uploaded source file."""
+
+    manifest_id: str
+    job_id: str
+    bucket: str
+    object_key: str
+    object_key_hash: str
+    checksum: str | None = None
+    content_type: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        """Validate required file manifest fields."""
+        if not self.manifest_id.strip():
+            raise ValueError("manifest_id is required")
+
+        if not self.job_id.strip():
+            raise ValueError("job_id is required")
+
+        if not self.bucket.strip():
+            raise ValueError("bucket is required")
+
+        if not self.object_key.strip():
+            raise ValueError("object_key is required")
+
+        if not self.object_key_hash.strip():
+            raise ValueError("object_key_hash is required")

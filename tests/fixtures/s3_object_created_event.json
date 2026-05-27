@@ -1,0 +1,17 @@
+{
+  "Records": [
+    {
+      "eventName": "ObjectCreated:Put",
+      "s3": {
+        "bucket": {
+          "name": "datapulse-local-raw"
+        },
+        "object": {
+          "key": "uploads/orders%20sample.csv",
+          "size": 128,
+          "eTag": "sample-etag-001"
+        }
+      }
+    }
+  ]
+}

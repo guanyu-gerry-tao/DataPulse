@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 from typing import Protocol
 
+from datapulse.models import FileManifest
 from datapulse.models import JobRecord
 
 
@@ -26,4 +27,12 @@ class StorageBackend(Protocol):
         metadata: Mapping[str, object] | None = None,
     ) -> JobRecord:
         """Update a job lifecycle status and return the updated record."""
+        ...
+
+    def record_file_manifest(self, manifest: FileManifest) -> FileManifest:
+        """Persist metadata for one uploaded source file."""
+        ...
+
+    def find_job_by_file(self, bucket: str, object_key_hash: str) -> JobRecord | None:
+        """Return the job created for one uploaded file, or None when missing."""
         ...
