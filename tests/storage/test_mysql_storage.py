@@ -14,6 +14,8 @@ class FakeMySQLConnection:
 
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, object]] = {}
+        self.file_manifests: dict[tuple[str, str], dict[str, object]] = {}
+        self.file_manifest_ids: set[str] = set()
         self.commit_count = 0
 
     def cursor(self, dictionary: bool = False) -> "FakeMySQLCursor":
@@ -71,6 +73,31 @@ class FakeMySQLCursor:
             return
 
         # Return one job row for the requested primary key.
+        if (
+            normalized_sql.startswith("select")
+            and "from file_manifests" in normalized_sql
+            and "inner join jobs" in normalized_sql
+        ):
+            assert "file_manifests.bucket = %s" in normalized_sql
+            assert "file_manifests.object_key_hash = %s" in normalized_sql
+            assert len(params) == 2
+            bucket = str(params[0])
+            object_key_hash = str(params[1])
+            manifest = self.connection.file_manifests.get((bucket, object_key_hash))
+            if manifest is None:
+                self.selected_row = None
+                self.rowcount = 0
+                return
+
+            job_id = str(manifest["job_id"])
+            self.selected_row = self.connection.jobs.get(job_id)
+            if self.selected_row is None:
+                self.rowcount = 0
+            else:
+                self.rowcount = 1
+            return
+
+        # Return one job row for the requested primary key.
         if normalized_sql.startswith("select") and "from jobs" in normalized_sql:
             assert "where job_id = %s" in normalized_sql
             assert len(params) == 1
@@ -95,6 +122,37 @@ class FakeMySQLCursor:
             row["status"] = params[0]
             row["last_error"] = params[1]
             row["updated_at"] = self._store_mysql_datetime(params[2])
+            self.rowcount = 1
+            return
+
+        # Store one file manifest by bucket and object hash.
+        if normalized_sql.startswith("insert into file_manifests"):
+            assert len(params) == 8
+            manifest_id = str(params[0])
+            job_id = str(params[1])
+            bucket = str(params[2])
+            object_key_hash = str(params[4])
+            manifest_key = (bucket, object_key_hash)
+            if job_id not in self.connection.jobs:
+                raise ValueError(f"Missing job_id for file manifest: {job_id}")
+
+            if manifest_id in self.connection.file_manifest_ids:
+                raise ValueError(f"Duplicate manifest_id: {manifest_id}")
+
+            if manifest_key in self.connection.file_manifests:
+                raise ValueError(f"Duplicate file manifest: {manifest_key}")
+
+            self.connection.file_manifest_ids.add(manifest_id)
+            self.connection.file_manifests[manifest_key] = {
+                "manifest_id": manifest_id,
+                "job_id": job_id,
+                "bucket": params[2],
+                "object_key": params[3],
+                "object_key_hash": params[4],
+                "checksum": params[5],
+                "content_type": params[6],
+                "created_at": self._store_mysql_datetime(params[7]),
+            }
             self.rowcount = 1
             return
 

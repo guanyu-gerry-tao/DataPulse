@@ -45,6 +45,9 @@ def test_mysql_jobs_schema_is_repeatable_and_indexed() -> None:
     assert "status VARCHAR(32) NOT NULL" in schema_sql
     assert "INDEX idx_jobs_status_created_at (status, created_at)" in schema_sql
     assert "INDEX idx_jobs_created_at (created_at)" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS file_manifests" in schema_sql
+    assert "UNIQUE KEY uq_file_manifest_bucket_key_hash" in schema_sql
+    assert "CONSTRAINT fk_file_manifests_job" in schema_sql
 
 
 def test_apply_mysql_schema_executes_jobs_schema_and_commits() -> None:
@@ -52,6 +55,9 @@ def test_apply_mysql_schema_executes_jobs_schema_and_commits() -> None:
 
     apply_mysql_schema(connection)
 
-    assert len(connection.executed_statements) == 1
+    assert len(connection.executed_statements) == 2
     assert connection.executed_statements[0].startswith("CREATE TABLE IF NOT EXISTS jobs")
+    assert connection.executed_statements[1].startswith(
+        "CREATE TABLE IF NOT EXISTS file_manifests"
+    )
     assert connection.commit_count == 1

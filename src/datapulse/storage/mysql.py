@@ -8,6 +8,7 @@ from datetime import timezone
 from typing import Any
 from typing import Mapping
 
+from datapulse.models import FileManifest
 from datapulse.models import JobRecord
 from datapulse.models import validate_job_status
 from datapulse.models import utc_now
@@ -90,6 +91,76 @@ class MySQLStorageAdapter(StorageBackend):
                 WHERE job_id = %s
                 """,
                 (job_id,),
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._job_from_row(row)
+
+    def record_file_manifest(self, manifest: FileManifest) -> FileManifest:
+        """Insert metadata for one uploaded source file."""
+        connection = self.connection_factory()
+
+        # Store the idempotency key enforced by the MySQL unique constraint.
+        with connection.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO file_manifests (
+                    manifest_id,
+                    job_id,
+                    bucket,
+                    object_key,
+                    object_key_hash,
+                    checksum,
+                    content_type,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    manifest.manifest_id,
+                    manifest.job_id,
+                    manifest.bucket,
+                    manifest.object_key,
+                    manifest.object_key_hash,
+                    manifest.checksum,
+                    manifest.content_type,
+                    manifest.created_at,
+                ),
+            )
+
+        connection.commit()
+        return manifest
+
+    def find_job_by_file(self, bucket: str, object_key_hash: str) -> JobRecord | None:
+        """Return the job created for one uploaded file."""
+        connection = self.connection_factory()
+
+        # Join manifest to jobs so idempotency returns the stored job metadata.
+        with connection.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    jobs.job_id,
+                    jobs.status,
+                    jobs.source_bucket,
+                    jobs.source_key,
+                    jobs.total_records,
+                    jobs.valid_records,
+                    jobs.invalid_records,
+                    jobs.attempt_count,
+                    jobs.last_error,
+                    jobs.next_attempt_at,
+                    jobs.created_at,
+                    jobs.updated_at
+                FROM file_manifests
+                INNER JOIN jobs ON jobs.job_id = file_manifests.job_id
+                WHERE file_manifests.bucket = %s
+                  AND file_manifests.object_key_hash = %s
+                """,
+                (bucket, object_key_hash),
             )
             row = cursor.fetchone()
 
