@@ -13,6 +13,8 @@ from datapulse.models import JobRecord
 from datapulse.queue.base import ProcessingMessage
 from datapulse.queue.memory import InMemoryQueueAdapter
 from datapulse.storage.base import StorageBackend
+from datapulse.storage.mysql import MySQLStorageAdapter
+from tests.storage.test_mysql_storage import FakeMySQLConnection
 
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -129,6 +131,43 @@ def test_ingestion_handler_is_idempotent_for_repeated_file_event() -> None:
     assert storage.created_job_count == 1
     assert storage.recorded_manifest_count == 1
     assert len(queue.messages) == 1
+
+
+def test_ingestion_handler_idempotency_uses_mysql_manifest_lookup() -> None:
+    connection = FakeMySQLConnection()
+    storage = MySQLStorageAdapter(connection_factory=lambda: connection)
+    queue = InMemoryQueueAdapter()
+    event = json.loads((FIXTURE_DIR / "s3_object_created_event.json").read_text())
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    first_result = handle_s3_object_created_event(
+        event,
+        storage=storage,
+        queue=queue,
+        job_id_factory=lambda: "job_mysql_001",
+        clock=lambda: now,
+    )
+    second_result = handle_s3_object_created_event(
+        event,
+        storage=storage,
+        queue=queue,
+        job_id_factory=lambda: "job_mysql_002",
+        clock=lambda: now,
+    )
+
+    assert first_result.job_id == "job_mysql_001"
+    assert second_result.job_id == "job_mysql_001"
+    assert second_result.created is False
+    assert len(connection.jobs) == 1
+    assert len(connection.file_manifests) == 1
+    assert queue.messages == [
+        ProcessingMessage(
+            job_id="job_mysql_001",
+            bucket="datapulse-local-raw",
+            object_key="uploads/orders sample.csv",
+            object_key_hash=first_result.object_key_hash,
+        )
+    ]
 
 
 def test_ingestion_handler_rejects_unsupported_file_extension() -> None:

@@ -27,3 +27,19 @@ def test_parse_s3_object_created_event_decodes_bucket_and_key() -> None:
 def test_parse_s3_object_created_event_rejects_missing_record() -> None:
     with pytest.raises(ValueError, match="S3 event must contain at least one record"):
         parse_s3_object_created_event({"Records": []})
+
+
+def test_parse_s3_object_created_event_rejects_non_object_created_event() -> None:
+    event = json.loads((FIXTURE_DIR / "s3_object_created_event.json").read_text())
+    event["Records"][0]["eventName"] = "ObjectRemoved:Delete"
+
+    with pytest.raises(ValueError, match="S3 event must be ObjectCreated"):
+        parse_s3_object_created_event(event)
+
+
+def test_parse_s3_object_created_event_rejects_multiple_records() -> None:
+    event = json.loads((FIXTURE_DIR / "s3_object_created_event.json").read_text())
+    event["Records"].append(event["Records"][0])
+
+    with pytest.raises(ValueError, match="S3 event must contain exactly one record"):
+        parse_s3_object_created_event(event)

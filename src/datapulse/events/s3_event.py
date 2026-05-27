@@ -26,9 +26,16 @@ def parse_s3_object_created_event(event: Mapping[str, Any]) -> S3ObjectCreatedEv
     if not isinstance(records, list) or len(records) == 0:
         raise ValueError("S3 event must contain at least one record")
 
+    if len(records) > 1:
+        raise ValueError("S3 event must contain exactly one record")
+
     first_record = records[0]
     if not isinstance(first_record, Mapping):
         raise ValueError("S3 event record must be an object")
+
+    event_name = first_record.get("eventName")
+    if isinstance(event_name, str) and not event_name.startswith("ObjectCreated:"):
+        raise ValueError("S3 event must be ObjectCreated")
 
     s3_payload = first_record.get("s3")
     if not isinstance(s3_payload, Mapping):

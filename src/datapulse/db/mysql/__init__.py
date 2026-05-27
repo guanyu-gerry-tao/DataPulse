@@ -18,10 +18,10 @@ def load_mysql_schema_sql() -> str:
 
 
 def apply_mysql_schema(connection: Any) -> None:
-    """Apply the M1 MySQL schema to a DB-API style connection."""
+    """Apply local MySQL schema migrations to a DB-API style connection."""
     schema_sql = load_mysql_schema_sql()
 
-    # Split only on semicolons because the M1 migration contains plain DDL.
+    # Split only on semicolons because local migrations contain plain DDL.
     statements = [statement.strip() for statement in schema_sql.split(";")]
     with connection.cursor() as cursor:
         for statement in statements:

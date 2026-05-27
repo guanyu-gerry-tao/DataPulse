@@ -15,6 +15,7 @@ class FakeMySQLConnection:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, object]] = {}
         self.file_manifests: dict[tuple[str, str], dict[str, object]] = {}
+        self.file_manifest_ids: set[str] = set()
         self.commit_count = 0
 
     def cursor(self, dictionary: bool = False) -> "FakeMySQLCursor":
@@ -128,15 +129,23 @@ class FakeMySQLCursor:
         if normalized_sql.startswith("insert into file_manifests"):
             assert len(params) == 8
             manifest_id = str(params[0])
+            job_id = str(params[1])
             bucket = str(params[2])
             object_key_hash = str(params[4])
             manifest_key = (bucket, object_key_hash)
+            if job_id not in self.connection.jobs:
+                raise ValueError(f"Missing job_id for file manifest: {job_id}")
+
+            if manifest_id in self.connection.file_manifest_ids:
+                raise ValueError(f"Duplicate manifest_id: {manifest_id}")
+
             if manifest_key in self.connection.file_manifests:
                 raise ValueError(f"Duplicate file manifest: {manifest_key}")
 
+            self.connection.file_manifest_ids.add(manifest_id)
             self.connection.file_manifests[manifest_key] = {
                 "manifest_id": manifest_id,
-                "job_id": params[1],
+                "job_id": job_id,
                 "bucket": params[2],
                 "object_key": params[3],
                 "object_key_hash": params[4],
