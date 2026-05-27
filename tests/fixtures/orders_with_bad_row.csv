@@ -1,0 +1,4 @@
+order_id,amount,currency
+order-001,19.99,USD
+order-002,not-a-number,USD
+order-003,29.99,USD

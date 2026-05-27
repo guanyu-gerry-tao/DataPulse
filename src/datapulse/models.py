@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
+from decimal import Decimal
+from typing import Any
 
 
 ALLOWED_JOB_STATUSES = frozenset(
@@ -85,3 +87,56 @@ class FileManifest:
 
         if not self.object_key_hash.strip():
             raise ValueError("object_key_hash is required")
+
+
+@dataclass(frozen=True)
+class ProcessedRecord:
+    """Structured record written after a source row is validated."""
+
+    record_id: str
+    job_id: str
+    row_number: int
+    record_type: str | None = None
+    amount: Decimal | None = None
+    currency: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class ProcessingError:
+    """Validation or processing error tied to one job and optional row."""
+
+    error_id: str
+    job_id: str
+    row_number: int | None
+    error_code: str
+    error_message: str
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class ResultSummary:
+    """Aggregated result values for one processed job."""
+
+    job_id: str
+    total_records: int
+    valid_records: int
+    invalid_records: int
+    total_amount: Decimal | str | None = None
+    summary: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class DeadLetterMessage:
+    """Evidence for a message that exhausted processing attempts."""
+
+    message_id: str
+    job_id: str | None
+    source_queue: str
+    payload: dict[str, Any]
+    error_message: str
+    attempt_count: int
+    created_at: datetime = field(default_factory=utc_now)

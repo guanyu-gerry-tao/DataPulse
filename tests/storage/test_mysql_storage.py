@@ -16,6 +16,11 @@ class FakeMySQLConnection:
         self.jobs: dict[str, dict[str, object]] = {}
         self.file_manifests: dict[tuple[str, str], dict[str, object]] = {}
         self.file_manifest_ids: set[str] = set()
+        self.processed_records: dict[tuple[str, int], dict[str, object]] = {}
+        self.processing_errors: list[dict[str, object]] = []
+        self.processing_error_ids: set[str] = set()
+        self.result_summaries: dict[str, dict[str, object]] = {}
+        self.dead_letter_messages: dict[str, dict[str, object]] = {}
         self.commit_count = 0
 
     def cursor(self, dictionary: bool = False) -> "FakeMySQLCursor":
@@ -73,6 +78,29 @@ class FakeMySQLCursor:
             return
 
         # Return one job row for the requested primary key.
+        if normalized_sql.startswith("select") and "from result_summaries" in normalized_sql:
+            assert "where job_id = %s" in normalized_sql
+            assert len(params) == 1
+            job_id = str(params[0])
+            self.selected_row = self.connection.result_summaries.get(job_id)
+            if self.selected_row is None:
+                self.rowcount = 0
+            else:
+                self.rowcount = 1
+            return
+
+        # Return processing errors for the requested job.
+        if normalized_sql.startswith("select") and "from processing_errors" in normalized_sql:
+            assert "where job_id = %s" in normalized_sql
+            assert len(params) == 1
+            job_id = str(params[0])
+            self.selected_rows = [
+                row for row in self.connection.processing_errors if row["job_id"] == job_id
+            ]
+            self.rowcount = len(self.selected_rows)
+            return
+
+        # Return one job row for the requested primary key.
         if (
             normalized_sql.startswith("select")
             and "from file_manifests" in normalized_sql
@@ -112,8 +140,8 @@ class FakeMySQLCursor:
         # Update status fields on an existing job row.
         if normalized_sql.startswith("update jobs"):
             assert "where job_id = %s" in normalized_sql
-            assert len(params) == 4
-            job_id = str(params[3])
+            assert len(params) == 9
+            job_id = str(params[8])
             if job_id not in self.connection.jobs:
                 self.rowcount = 0
                 return
@@ -121,7 +149,12 @@ class FakeMySQLCursor:
             row = self.connection.jobs[job_id]
             row["status"] = params[0]
             row["last_error"] = params[1]
-            row["updated_at"] = self._store_mysql_datetime(params[2])
+            row["total_records"] = params[2]
+            row["valid_records"] = params[3]
+            row["invalid_records"] = params[4]
+            row["attempt_count"] = params[5]
+            row["next_attempt_at"] = self._store_mysql_datetime(params[6])
+            row["updated_at"] = self._store_mysql_datetime(params[7])
             self.rowcount = 1
             return
 
@@ -156,11 +189,136 @@ class FakeMySQLCursor:
             self.rowcount = 1
             return
 
+        # Store one processed record and ignore duplicate job-row writes.
+        if normalized_sql.startswith("insert into processed_records"):
+            assert len(params) == 8
+            job_id = str(params[1])
+            row_number = int(params[2])
+            record_key = (job_id, row_number)
+            if job_id not in self.connection.jobs:
+                raise ValueError(f"Missing job_id for processed record: {job_id}")
+
+            if (
+                record_key in self.connection.processed_records
+                and "on duplicate key update" not in normalized_sql
+            ):
+                raise ValueError(f"Duplicate processed record: {record_key}")
+
+            if record_key not in self.connection.processed_records:
+                self.connection.processed_records[record_key] = {
+                    "record_id": params[0],
+                    "job_id": job_id,
+                    "row_number": row_number,
+                    "record_type": params[3],
+                    "amount": params[4],
+                    "currency": params[5],
+                    "payload_json": params[6],
+                    "created_at": self._store_mysql_datetime(params[7]),
+                }
+            else:
+                row = self.connection.processed_records[record_key]
+                row["record_type"] = params[3]
+                row["amount"] = params[4]
+                row["currency"] = params[5]
+                row["payload_json"] = params[6]
+            self.rowcount = 1
+            return
+
+        # Store one processing error.
+        if normalized_sql.startswith("insert into processing_errors"):
+            assert len(params) == 6
+            error_id = str(params[0])
+            job_id = str(params[1])
+            if job_id not in self.connection.jobs:
+                raise ValueError(f"Missing job_id for processing error: {job_id}")
+
+            if (
+                error_id in self.connection.processing_error_ids
+                and "on duplicate key update" not in normalized_sql
+            ):
+                raise ValueError(f"Duplicate processing error: {error_id}")
+
+            if error_id in self.connection.processing_error_ids:
+                self.rowcount = 1
+                return
+
+            self.connection.processing_error_ids.add(error_id)
+            self.connection.processing_errors.append(
+                {
+                    "error_id": params[0],
+                    "job_id": job_id,
+                    "row_number": params[2],
+                    "error_code": params[3],
+                    "error_message": params[4],
+                    "created_at": self._store_mysql_datetime(params[5]),
+                }
+            )
+            self.rowcount = 1
+            return
+
+        # Store one result summary by job id.
+        if normalized_sql.startswith("insert into result_summaries"):
+            assert len(params) == 8
+            job_id = str(params[0])
+            if job_id not in self.connection.jobs:
+                raise ValueError(f"Missing job_id for result summary: {job_id}")
+
+            if (
+                job_id in self.connection.result_summaries
+                and "on duplicate key update" not in normalized_sql
+            ):
+                raise ValueError(f"Duplicate result summary: {job_id}")
+
+            if job_id not in self.connection.result_summaries:
+                self.connection.result_summaries[job_id] = {
+                    "job_id": job_id,
+                    "total_records": params[1],
+                    "valid_records": params[2],
+                    "invalid_records": params[3],
+                    "total_amount": params[4],
+                    "summary_json": params[5],
+                    "created_at": self._store_mysql_datetime(params[6]),
+                    "updated_at": self._store_mysql_datetime(params[7]),
+                }
+            else:
+                row = self.connection.result_summaries[job_id]
+                row["total_records"] = params[1]
+                row["valid_records"] = params[2]
+                row["invalid_records"] = params[3]
+                row["total_amount"] = params[4]
+                row["summary_json"] = params[5]
+                row["updated_at"] = self._store_mysql_datetime(params[7])
+            self.rowcount = 1
+            return
+
+        # Store one dead-letter message.
+        if normalized_sql.startswith("insert into dead_letter_messages"):
+            assert len(params) == 7
+            message_id = str(params[0])
+            if message_id in self.connection.dead_letter_messages:
+                raise ValueError(f"Duplicate message_id: {message_id}")
+
+            self.connection.dead_letter_messages[message_id] = {
+                "message_id": message_id,
+                "job_id": params[1],
+                "source_queue": params[2],
+                "payload_json": params[3],
+                "error_message": params[4],
+                "attempt_count": params[5],
+                "created_at": self._store_mysql_datetime(params[6]),
+            }
+            self.rowcount = 1
+            return
+
         raise AssertionError(f"Unexpected SQL: {sql}")
 
     def fetchone(self) -> dict[str, object] | None:
         """Return the selected row from the most recent SELECT."""
         return self.selected_row
+
+    def fetchall(self) -> list[dict[str, object]]:
+        """Return selected rows from the most recent SELECT."""
+        return getattr(self, "selected_rows", [])
 
     def _store_mysql_datetime(self, value: object) -> object:
         """Store datetimes the way a MySQL DATETIME column usually returns them."""
@@ -230,6 +388,43 @@ def test_update_job_status_returns_updated_job() -> None:
     assert updated_job.status == "PROCESSING"
     assert updated_job.updated_at == later
     assert connection.commit_count == 2
+
+
+def test_update_job_status_preserves_metadata_when_not_supplied() -> None:
+    connection = FakeMySQLConnection()
+    adapter = MySQLStorageAdapter(connection_factory=lambda: connection)
+    now = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
+    retry_at = datetime(2026, 5, 26, 12, 5, tzinfo=timezone.utc)
+    later = datetime(2026, 5, 26, 12, 6, tzinfo=timezone.utc)
+    adapter.create_job(
+        JobRecord(
+            job_id="job_preserve_metadata",
+            status="FAILED",
+            total_records=10,
+            valid_records=8,
+            invalid_records=2,
+            attempt_count=2,
+            last_error="temporary failure",
+            next_attempt_at=retry_at,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    updated_job = adapter.update_job_status(
+        "job_preserve_metadata",
+        "PROCESSING",
+        metadata={"updated_at": later},
+    )
+
+    assert updated_job.status == "PROCESSING"
+    assert updated_job.total_records == 10
+    assert updated_job.valid_records == 8
+    assert updated_job.invalid_records == 2
+    assert updated_job.attempt_count == 2
+    assert updated_job.last_error == "temporary failure"
+    assert updated_job.next_attempt_at == retry_at
+    assert updated_job.updated_at == later
 
 
 def test_update_job_status_rejects_invalid_status_before_writing() -> None:
